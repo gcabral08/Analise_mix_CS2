@@ -118,13 +118,23 @@ class StatsAnalyzer:
         stats['% de Vitória Juntos'] = (stats['Vitórias'] / stats['Partidas_Juntos']) * 100
         return stats.sort_values(by='% de Vitória Juntos', ascending=not best).head(5)
 
+    # --- FUNÇÃO CORRIGIDA ---
     def get_map_leaderboard(self, map_name, start_date, end_date, sort_by='% de Vitória'):
         df = self._filter_by_date(start_date, end_date)
         map_df = df[df['map'] == map_name]
         if map_df.empty: return pd.DataFrame()
-        # Usamos type(self) para permitir herança, se aplicável. Senão, StatsAnalyzer funciona igual.
-        temp_analyzer = type(self)([]); temp_analyzer.df = map_df; temp_analyzer._precompute_rosters()
-        return temp_analyzer.get_overall_player_stats(start_date, end_date, sort_by)
+
+        # Lógica de get_overall_player_stats replicada aqui, mas operando em map_df
+        stats = map_df.groupby('player').agg(
+            **{'Partidas Jogadas': ('match_id', 'nunique'), 'Abates (K)': ('k', 'sum'),
+               'Mortes (D)': ('d', 'sum'), 'Saldo de Rounds': ('round_diff', 'sum')})
+        wins = map_df[map_df['won'] == True].groupby('player')['match_id'].nunique()
+        stats['Vitórias'] = wins.reindex(stats.index, fill_value=0).astype(int)
+        stats['Derrotas'] = stats['Partidas Jogadas'] - stats['Vitórias']
+        stats['% de Vitória'] = (stats['Vitórias'] / stats['Partidas Jogadas']).fillna(0) * 100
+        stats['Taxa K/D'] = (stats['Abates (K)'] / stats['Mortes (D)']).replace([np.inf, -np.inf], 0).fillna(0)
+        
+        return stats.sort_values(by=sort_by, ascending=False)
 
     def get_h2h_overall(self, player1, player2, start_date, end_date):
         df = self._filter_by_date(start_date, end_date)
@@ -271,12 +281,10 @@ if uploaded_file:
                     col1, col2 = st.columns(2)
                     with col1:
                         st.write("**Melhores Companheiros (% de Vitória)**")
-                        best_teammates = analyzer.get_performance_with_teammates(player_name, start_date, end_date, True)
-                        st.dataframe(best_teammates.style.format({'% de Vitória Juntos': '{:.2f}%'}))
+                        st.dataframe(analyzer.get_performance_with_teammates(player_name, start_date, end_date, True).style.format({'% de Vitória Juntos': '{:.2f}%'}))
                     with col2:
                         st.write("**Piores Companheiros (% de Vitória)**")
-                        worst_teammates = analyzer.get_performance_with_teammates(player_name, start_date, end_date, False)
-                        st.dataframe(worst_teammates.style.format({'% de Vitória Juntos': '{:.2f}%'}))
+                        st.dataframe(analyzer.get_performance_with_teammates(player_name, start_date, end_date, False).style.format({'% de Vitória Juntos': '{:.2f}%'}))
                 else: st.warning("Nenhum dado para este jogador no período.")
 
         elif analysis_type == "Análise por Mapa":
@@ -316,7 +324,6 @@ if uploaded_file:
                 is_disabled = (i > 0 and not st.session_state.team_players[i-1])
                 if i > 0 and st.session_state.team_players[i-1]:
                     selected_so_far = [p for p in st.session_state.team_players if p]
-                    # --- LINHA CORRIGIDA ---
                     _, options, _ = analyzer.get_core_player_stats(selected_so_far, start_date, end_date)
                 
                 current_player = st.session_state.team_players[i]
