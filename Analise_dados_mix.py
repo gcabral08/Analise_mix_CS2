@@ -45,6 +45,7 @@ class StatsAnalyzer:
         df['date'] = pd.to_datetime(df['date'])
         return df
 
+    # --- FUNÇÃO CORRIGIDA ---
     def _precompute_rosters(self):
         if self.df.empty:
             self.rosters_by_match = pd.DataFrame()
@@ -56,7 +57,8 @@ class StatsAnalyzer:
             map=('map', 'first'),
             rounds_ganhos=('rounds_ganhos', 'first'),
             rounds_perdidos=('rounds_perdidos', 'first'),
-            won=('won', 'first')
+            won=('won', 'first'),
+            round_diff=('round_diff', 'first') # <--- LINHA ADICIONADA
         )
 
     def _filter_by_date(self, start_date, end_date):
@@ -197,17 +199,14 @@ class StatsAnalyzer:
     def get_team_combination_stats(self, start_date, end_date):
         df = self._filter_by_date(start_date, end_date)
         if df.empty: return pd.DataFrame()
-
         unique_matches_by_team = self.rosters_by_match[self.rosters_by_match.index.isin(df['match_id'].unique())]
         if unique_matches_by_team.empty: return pd.DataFrame()
-        
         team_stats = unique_matches_by_team.groupby('team_roster').agg(
             Partidas_Jogadas=('won', 'count'), Vitórias=('won', 'sum'),
             Saldo_de_Rounds=('round_diff', 'sum')
         )
         team_stats['Derrotas'] = team_stats['Partidas_Jogadas'] - team_stats['Vitórias']
         team_stats['% de Vitória'] = (team_stats['Vitórias'] / team_stats['Partidas_Jogadas']) * 100
-        
         best_maps = {}
         for roster, group in unique_matches_by_team.groupby('team_roster'):
             map_perf = group.groupby('map')['won'].agg(['count', 'sum'])
@@ -217,10 +216,8 @@ class StatsAnalyzer:
                 best_map_name, best_map_stats = map_perf.index[0], map_perf.iloc[0]
                 best_maps[roster] = f"{best_map_name} ({best_map_stats['win_rate']:.0f}% em {int(best_map_stats['count'])} jogos)"
             else: best_maps[roster] = "N/A"
-
         team_stats['Melhor Mapa'] = team_stats.index.map(best_maps)
         team_stats['Time'] = team_stats.index.map(lambda roster: ', '.join(sorted(list(roster))))
-        
         final_cols = ['Time', 'Partidas_Jogadas', 'Vitórias', 'Derrotas', '% de Vitória', 'Saldo_de_Rounds', 'Melhor Mapa']
         return team_stats[final_cols].sort_values(by='Partidas_Jogadas', ascending=False).set_index('Time')
 
