@@ -9,11 +9,13 @@ from sklearn.linear_model import LinearRegression
 
 # --- LÓGICA DE ANÁLISE (CLASSE StatsAnalyzer) ---
 class StatsAnalyzer:
-    def __init__(self, data):
+    def __init__(self, data, apply_merges=True):
         if not data:
             raise ValueError("Os dados das partidas não foram carregados.")
         self.raw_data = data
         self.df = self._load_data_into_dataframe()
+        if apply_merges:
+            self._apply_name_merges()
         self._precompute_rosters()
 
     def _unify_player_names(self, name):
@@ -45,20 +47,22 @@ class StatsAnalyzer:
         df = pd.DataFrame(records)
         df['date'] = pd.to_datetime(df['date'])
         return df
+    
+    def _apply_name_merges(self):
+        if 'name_map' in st.session_state and st.session_state.name_map:
+            reverse_map = {alias: primary for primary, aliases in st.session_state.name_map.items() for alias in aliases}
+            self.df['player'] = self.df['player'].replace(reverse_map)
+            self.df['team_roster'] = self.df['team_roster'].apply(lambda roster: frozenset(reverse_map.get(p, p) for p in roster))
+            self.df['opponents'] = self.df['opponents'].apply(lambda roster: frozenset(reverse_map.get(p, p) for p in roster))
 
     def _precompute_rosters(self):
         if self.df.empty:
             self.rosters_by_match = pd.DataFrame()
             return
         self.rosters_by_match = self.df.groupby('match_id').agg(
-            team_roster=('team_roster', 'first'),
-            opponents=('opponents', 'first'),
-            date=('date', 'first'),
-            map=('map', 'first'),
-            rounds_ganhos=('rounds_ganhos', 'first'),
-            rounds_perdidos=('rounds_perdidos', 'first'),
-            won=('won', 'first'),
-            round_diff=('round_diff', 'first')
+            team_roster=('team_roster', 'first'), opponents=('opponents', 'first'), date=('date', 'first'),
+            map=('map', 'first'), rounds_ganhos=('rounds_ganhos', 'first'),
+            rounds_perdidos=('rounds_perdidos', 'first'), won=('won', 'first'), round_diff=('round_diff', 'first')
         )
 
     def _filter_by_date(self, start_date, end_date):
@@ -109,7 +113,7 @@ class StatsAnalyzer:
         match_stats['% de Vitória Cumulativa'] = (match_stats['Vitórias_Cumulativas'] / match_stats['Partidas_Totais']) * 100
         return match_stats
 
-    def get_performance_with_teammates(self, player_name, start_date, end_date, best=True):
+    def get_performance_with_teammates(self, player_name, start_date, end_date, best=True, min_games=1):
         df = self._filter_by_date(start_date, end_date)
         player_matches = df[df['player'] == player_name]
         if player_matches.empty: return pd.DataFrame()
@@ -117,6 +121,8 @@ class StatsAnalyzer:
         if not teammate_records: return pd.DataFrame()
         teammate_df = pd.DataFrame(teammate_records)
         stats = teammate_df.groupby('teammate').agg(Partidas_Juntos=('match_id', 'nunique'), Vitórias=('won', 'sum'))
+        stats = stats[stats['Partidas_Juntos'] >= min_games]
+        if stats.empty: return pd.DataFrame()
         stats['% de Vitória Juntos'] = (stats['Vitórias'] / stats['Partidas_Juntos']) * 100
         return stats.sort_values(by='% de Vitória Juntos', ascending=not best).head(5)
 
@@ -240,7 +246,6 @@ class StatsAnalyzer:
         results = {}
         for player in [player1, player2]:
             player_df = h2h_df[h2h_df['player'] == player]
-            # Usar reindex para garantir que todas as partidas do confronto sejam consideradas
             match_stats = player_df.groupby('match_id').agg(k=('k', 'first'), d=('d', 'first'), won=('won', 'first')).reindex(match_ids).dropna()
             if match_stats.empty: continue
             match_stats['K_Cumulativo'] = match_stats['k'].cumsum()
@@ -265,7 +270,7 @@ class StatsAnalyzer:
             model_kd = LinearRegression().fit(X, match_stats['kd_ratio'])
             kd_slope_overall = model_kd.coef_[0]
             last_10 = match_stats.tail(10)
-            if len(last_10) >= 2: # Precisa de pelo menos 2 pontos para uma linha
+            if len(last_10) >= 2:
                 X_10 = np.arange(len(last_10)).reshape(-1, 1)
                 model_kd_10 = LinearRegression().fit(X_10, last_10['kd_ratio'])
                 kd_slope_last_10 = model_kd_10.coef_[0]
@@ -335,6 +340,7 @@ st.set_page_config(layout="wide", page_title="Análise de Partidas CS2")
 st.title("📊 Painel de Análise de Partidas de Counter-Strike 2")
 
 if 'team_players' not in st.session_state: st.session_state.team_players = [""] * 5
+if 'name_map' not in st.session_state: st.session_state.name_map = {}
 
 uploaded_file = st.file_uploader("Carregue seu arquivo 'match_data.txt'", type="txt")
 
@@ -342,6 +348,12 @@ if uploaded_file:
     try:
         string_data = uploaded_file.getvalue().decode("utf-8")
         match_data = [json.loads(line) for line in string_data.splitlines() if line.strip()]
+        
+        # Cria um analyzer original para a gestão de Nicks
+        original_analyzer = StatsAnalyzer(match_data, apply_merges=False)
+        all_nicks = original_analyzer.get_player_list()
+        
+        # Cria o analyzer principal que aplicará as junções
         analyzer = StatsAnalyzer(match_data)
         player_list, map_list = analyzer.get_player_list(), analyzer.get_map_list()
         min_date, max_date = analyzer.df['date'].min().date(), analyzer.df['date'].max().date()
@@ -351,7 +363,7 @@ if uploaded_file:
         start_date, end_date = (date_range[0], date_range[1]) if len(date_range) == 2 else (min_date, max_date)
         
         st.sidebar.markdown("---")
-        analysis_type = st.sidebar.radio("Tipo de Análise:", ("Visão Geral", "Análise de Tendências", "Melhores Times", "Maiores Rivalidades", "Estatísticas Gerais", "Análise de Jogador", "Análise por Mapa", "Confronto 1x1", "Montar Time"))
+        analysis_type = st.sidebar.radio("Tipo de Análise:", ("Visão Geral", "Análise de Tendências", "Melhores Times", "Maiores Rivalidades", "Estatísticas Gerais", "Análise de Jogador", "Análise por Mapa", "Confronto 1x1", "Montar Time", "Gerenciar Nicks"))
 
         if analysis_type == "Visão Geral":
             st.header(f"Visão Geral das Partidas ({start_date} a {end_date})")
@@ -408,6 +420,7 @@ if uploaded_file:
 
         elif analysis_type == "Análise de Jogador":
             player_name = st.sidebar.selectbox("Selecione o Jogador:", player_list)
+            min_games_teammates = st.sidebar.slider("Mínimo de partidas com companheiros:", 1, 20, 3, key="min_games_teammates")
             if player_name:
                 st.header(f"Análise Individual de {player_name}")
                 summary = analyzer.get_player_overall_stats_summary(player_name, start_date, end_date)
@@ -421,11 +434,11 @@ if uploaded_file:
                     st.subheader("Análise de Companheiros")
                     col1, col2 = st.columns(2)
                     with col1:
-                        st.write("**Melhores Companheiros (% de Vitória)**")
-                        st.dataframe(analyzer.get_performance_with_teammates(player_name, start_date, end_date, True).style.format({'% de Vitória Juntos': '{:.2f}%'}))
+                        st.write(f"**Melhores Companheiros (mín. {min_games_teammates} partidas)**")
+                        st.dataframe(analyzer.get_performance_with_teammates(player_name, start_date, end_date, True, min_games=min_games_teammates).style.format({'% de Vitória Juntos': '{:.2f}%'}))
                     with col2:
-                        st.write("**Piores Companheiros (% de Vitória)**")
-                        st.dataframe(analyzer.get_performance_with_teammates(player_name, start_date, end_date, False).style.format({'% de Vitória Juntos': '{:.2f}%'}))
+                        st.write(f"**Piores Companheiros (mín. {min_games_teammates} partidas)**")
+                        st.dataframe(analyzer.get_performance_with_teammates(player_name, start_date, end_date, False, min_games=min_games_teammates).style.format({'% de Vitória Juntos': '{:.2f}%'}))
                 else: st.warning("Nenhum dado para este jogador no período.")
 
         elif analysis_type == "Análise por Mapa":
@@ -487,6 +500,32 @@ if uploaded_file:
                     if len(final_team) == 5:
                         st.subheader("Histórico de Partidas do Time Completo"); st.dataframe(history_df)
                 else: st.warning("Este núcleo de jogadores nunca jogou junto.")
+        
+        elif analysis_type == "Gerenciar Nicks":
+            st.header("Gerenciador de Nicks")
+            st.info("Use esta seção para unir as estatísticas de jogadores que mudaram de nick. As mudanças serão aplicadas em todo o painel.")
+            col1, col2 = st.columns(2)
+            with col1:
+                st.subheader("Criar/Editar Junção")
+                primary_nick = st.selectbox("Selecione o Nick Principal (novo):", all_nicks)
+                alias_options = [n for n in all_nicks if n != primary_nick]
+                alias_nicks = st.multiselect("Selecione os Nicks Antigos para unir a ele:", alias_options)
+                if st.button("Salvar Junção"):
+                    for p_nick, a_nicks in list(st.session_state.name_map.items()):
+                        st.session_state.name_map[p_nick] = [n for n in a_nicks if n not in alias_nicks]
+                    st.session_state.name_map[primary_nick] = alias_nicks
+                    st.success(f"Nicks {alias_nicks} foram unidos a '{primary_nick}'. O painel será recarregado.")
+                    st.experimental_rerun()
+            with col2:
+                st.subheader("Junções Atuais")
+                if not st.session_state.name_map:
+                    st.write("Nenhuma junção de nick ativa.")
+                else: st.json(st.session_state.name_map)
+                if st.button("Limpar Todas as Junções"):
+                    st.session_state.name_map = {}
+                    st.success("Todas as junções foram removidas. O painel será recarregado.")
+                    st.experimental_rerun()
+
     except Exception as e:
         st.error(f"Ocorreu um erro: {e}"); import traceback; st.error(traceback.format_exc())
 else:
