@@ -240,6 +240,7 @@ class StatsAnalyzer:
         results = {}
         for player in [player1, player2]:
             player_df = h2h_df[h2h_df['player'] == player]
+            # Usar reindex para garantir que todas as partidas do confronto sejam consideradas
             match_stats = player_df.groupby('match_id').agg(k=('k', 'first'), d=('d', 'first'), won=('won', 'first')).reindex(match_ids).dropna()
             if match_stats.empty: continue
             match_stats['K_Cumulativo'] = match_stats['k'].cumsum()
@@ -277,19 +278,48 @@ class StatsAnalyzer:
         return geral_df, recente_df
 
 # --- FUNÇÕES DE PLOTAGEM ---
+def create_match_history_chart(series):
+    if series.empty: return None
+    fig, ax = plt.subplots(figsize=(12, 6))
+    series.plot(kind='bar', ax=ax, color='teal', width=0.8)
+    ax.set_title('Histórico de Partidas por Dia', fontsize=16); ax.set_xlabel('Data'); ax.set_ylabel('Número de Partidas')
+    plt.xticks(rotation=45, ha='right'); plt.tight_layout(); buf = io.BytesIO(); plt.savefig(buf, format='png'); plt.close(fig); return buf
+
+def create_player_trend_chart(trend_df):
+    if trend_df.empty: return None
+    fig, ax1 = plt.subplots(figsize=(12, 6))
+    match_index = range(1, len(trend_df) + 1)
+    color = 'tab:blue'; ax1.set_xlabel('Partidas Jogadas (em ordem cronológica)'); ax1.set_ylabel('Taxa K/D Cumulativa', color=color); ax1.plot(match_index, trend_df['Taxa K/D Cumulativa'], color=color, marker='o', markersize=4); ax1.tick_params(axis='y', labelcolor=color); ax1.grid(True, axis='y', linestyle='--'); ax2 = ax1.twinx(); color = 'tab:red'; ax2.set_ylabel('% de Vitória Cumulativa', color=color); ax2.plot(match_index, trend_df['% de Vitória Cumulativa'], color=color, linestyle='--', marker='x', markersize=4); ax2.tick_params(axis='y', labelcolor=color); fig.suptitle('Tendência de Performance Cumulativa', fontsize=16); fig.tight_layout(rect=[0, 0.03, 1, 0.95]); buf = io.BytesIO(); plt.savefig(buf, format='png'); plt.close(fig); return buf
+
+def create_h2h_comparison_chart(h2h_stats, player1, player2):
+    metrics = ['Vitórias', 'Kills', 'Deaths', 'Taxa K/D']
+    p1_values = [h2h_stats[f'Vitórias {player1}'], h2h_stats[f'Kills {player1}'], h2h_stats[f'Deaths {player1}'], h2h_stats[f'Taxa K/D {player1}']]
+    p2_values = [h2h_stats[f'Vitórias {player2}'], h2h_stats[f'Kills {player2}'], h2h_stats[f'Deaths {player2}'], h2h_stats[f'Taxa K/D {player2}']]
+    x, width = np.arange(len(metrics)), 0.35
+    fig, ax = plt.subplots(figsize=(10, 6))
+    rects1 = ax.bar(x - width/2, p1_values, width, label=player1, color='cornflowerblue')
+    rects2 = ax.bar(x + width/2, p2_values, width, label=player2, color='lightcoral')
+    ax.set_ylabel('Valores'); ax.set_title(f'Comparativo H2H: {player1} vs {player2}'); ax.set_xticks(x); ax.set_xticklabels(metrics); ax.legend()
+    for rects in [rects1, rects2]:
+        for rect in rects:
+            height = rect.get_height()
+            ax.annotate(f'{height:.2f}' if isinstance(height, float) and height < 5 else f'{int(height)}', xy=(rect.get_x() + rect.get_width() / 2, height), xytext=(0, 3), textcoords="offset points", ha='center', va='bottom')
+    fig.tight_layout(); buf = io.BytesIO(); plt.savefig(buf, format='png'); plt.close(fig); return buf
+
 def create_top_kd_chart(df):
     MIN_GAMES = 5
     filtered_df = df[df['Partidas Jogadas'] >= MIN_GAMES].nlargest(10, 'Taxa K/D')
     if filtered_df.empty: return None, f"Nenhum jogador com {MIN_GAMES} ou mais partidas."
     fig, ax = plt.subplots(figsize=(10, 6)); players = filtered_df.index; kd_ratio = filtered_df['Taxa K/D']
-    ax.barh(players, kd_ratio, color='skyblue'); min_val, max_val = kd_ratio.min(), kd_ratio.max()
+    ax.barh(players, kd_ratio, color='skyblue')
+    min_val, max_val = kd_ratio.min(), kd_ratio.max()
     ax.set_xlim(left=max(0, min_val * 0.9), right=max_val * 1.1)
     for index, value in enumerate(kd_ratio):
         ax.text(value, index, f' {value:.2f}', va='center')
     ax.set_title(f'Top {len(filtered_df)} Jogadores por Taxa K/D (mín. {MIN_GAMES} partidas)'); ax.set_xlabel('Taxa K/D')
     plt.gca().invert_yaxis(); plt.tight_layout(); buf = io.BytesIO(); plt.savefig(buf, format='png'); plt.close(fig)
     return buf, None
-
+    
 def create_h2h_trend_chart(trend_p1, trend_p2, player1, player2):
     if trend_p1.empty or trend_p2.empty: return None
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10), sharex=True)
@@ -299,12 +329,13 @@ def create_h2h_trend_chart(trend_p1, trend_p2, player1, player2):
     ax2.plot(match_index, trend_p1['% de Vitória Cumulativa'], label=f'% Vit. {player1}', color='cornflowerblue', marker='o'); ax2.plot(match_index, trend_p2['% de Vitória Cumulativa'], label=f'% Vit. {player2}', color='lightcoral', marker='x')
     ax2.set_xlabel('Número do Confronto Direto'); ax2.set_ylabel('% de Vitória Cumulativa (nos confrontos)'); ax2.set_title('Evolução da % de Vitória em Confrontos Diretos')
     ax2.legend(); ax2.grid(True, linestyle='--'); fig.tight_layout(); buf = io.BytesIO(); plt.savefig(buf, format='png'); plt.close(fig); return buf
-# ... (outras funções de plotagem existentes)
 
 # --- INTERFACE GRÁFICA (Streamlit) ---
 st.set_page_config(layout="wide", page_title="Análise de Partidas CS2")
 st.title("📊 Painel de Análise de Partidas de Counter-Strike 2")
+
 if 'team_players' not in st.session_state: st.session_state.team_players = [""] * 5
+
 uploaded_file = st.file_uploader("Carregue seu arquivo 'match_data.txt'", type="txt")
 
 if uploaded_file:
@@ -314,20 +345,25 @@ if uploaded_file:
         analyzer = StatsAnalyzer(match_data)
         player_list, map_list = analyzer.get_player_list(), analyzer.get_map_list()
         min_date, max_date = analyzer.df['date'].min().date(), analyzer.df['date'].max().date()
+        
         st.sidebar.header("Filtros")
         date_range = st.sidebar.date_input("Intervalo de Datas:", value=(min_date, max_date), min_value=min_date, max_value=max_date)
         start_date, end_date = (date_range[0], date_range[1]) if len(date_range) == 2 else (min_date, max_date)
+        
         st.sidebar.markdown("---")
         analysis_type = st.sidebar.radio("Tipo de Análise:", ("Visão Geral", "Análise de Tendências", "Melhores Times", "Maiores Rivalidades", "Estatísticas Gerais", "Análise de Jogador", "Análise por Mapa", "Confronto 1x1", "Montar Time"))
 
         if analysis_type == "Visão Geral":
-            # ... (código existente)
-            pass
+            st.header(f"Visão Geral das Partidas ({start_date} a {end_date})")
+            match_counts = analyzer.get_match_count_over_time(start_date, end_date)
+            chart = create_match_history_chart(match_counts)
+            if chart: st.image(chart)
+            else: st.info("Nenhuma partida encontrada no período.")
 
         elif analysis_type == "Análise de Tendências":
             st.header(f"Análise de Tendências ({start_date} a {end_date})")
             st.info("Esta análise mede a 'inclinação' da performance (K/D) de cada jogador ao longo do tempo. Um valor positivo indica melhora, um negativo indica piora.")
-            min_games_trend = st.slider("Analisar jogadores com no mínimo quantas partidas?", 5, 30, 10)
+            min_games_trend = st.slider("Analisar jogadores com no mínimo quantas partidas?", 5, 30, 10, key="min_games_trend")
             geral_df, recente_df = analyzer.get_player_evolution_ranking(start_date, end_date, min_games=min_games_trend)
             if geral_df.empty:
                 st.warning(f"Não há jogadores com {min_games_trend} ou mais partidas para uma análise de tendência.")
@@ -349,21 +385,64 @@ if uploaded_file:
                     st.dataframe(recente_df[['Jogador', 'Partidas', 'Tendência K/D (Últimos 10)']].tail(10).sort_values(by='Tendência K/D (Últimos 10)').style.format({'Tendência K/D (Últimos 10)': '{:+.4f}'}))
 
         elif analysis_type == "Melhores Times":
-            # ... (código existente)
-            pass
-        
+            st.header(f"Ranking de Times por Partidas Jogadas ({start_date} a {end_date})")
+            min_games = st.slider("Mostrar times com no mínimo quantas partidas?", 1, 20, 3)
+            team_stats_df = analyzer.get_team_combination_stats(start_date, end_date)
+            filtered_df = team_stats_df[team_stats_df['Partidas_Jogadas'] >= min_games]
+            if not filtered_df.empty:
+                st.dataframe(filtered_df.style.format({'% de Vitória': '{:.2f}%'}))
+            else: st.info(f"Nenhum time encontrado com {min_games} ou mais partidas jogadas no período.")
+
         elif analysis_type == "Maiores Rivalidades":
             st.header(f"Maiores Rivalidades ({start_date} a {end_date})")
             h2h_leaderboard = analyzer.get_h2h_leaderboard(start_date, end_date)
             if not h2h_leaderboard.empty:
                 st.dataframe(h2h_leaderboard, use_container_width=True)
-            else:
-                st.info("Nenhum confronto direto encontrado no período.")
-        
+            else: st.info("Nenhum confronto direto encontrado no período.")
+
+        elif analysis_type == "Estatísticas Gerais":
+            st.header(f"Estatísticas Gerais ({start_date} a {end_date})")
+            sort_option = st.selectbox("Ordenar por:", ['Partidas Jogadas', '% de Vitória', 'Taxa K/D', 'Saldo de Rounds', 'Abates (K)'])
+            stats_df = analyzer.get_overall_player_stats(start_date, end_date, sort_by=sort_option)
+            st.dataframe(stats_df.style.format({'% de Vitória': '{:.2f}%', 'Taxa K/D': '{:.2f}'}))
+
+        elif analysis_type == "Análise de Jogador":
+            player_name = st.sidebar.selectbox("Selecione o Jogador:", player_list)
+            if player_name:
+                st.header(f"Análise Individual de {player_name}")
+                summary = analyzer.get_player_overall_stats_summary(player_name, start_date, end_date)
+                if summary:
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.metric("Partidas", summary["Partidas Jogadas"]); c2.metric("Vitórias", summary["Vitórias"]); c3.metric("Derrotas", summary["Derrotas"]); c4.metric("% de Vitória", summary["% de Vitória"])
+                    st.subheader("Tendência de Performance")
+                    trend_chart = create_player_trend_chart(analyzer.get_player_cumulative_trend(player_name, start_date, end_date))
+                    if trend_chart: st.image(trend_chart)
+                    else: st.info("Não há dados de tendência para este jogador.")
+                    st.subheader("Análise de Companheiros")
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.write("**Melhores Companheiros (% de Vitória)**")
+                        st.dataframe(analyzer.get_performance_with_teammates(player_name, start_date, end_date, True).style.format({'% de Vitória Juntos': '{:.2f}%'}))
+                    with col2:
+                        st.write("**Piores Companheiros (% de Vitória)**")
+                        st.dataframe(analyzer.get_performance_with_teammates(player_name, start_date, end_date, False).style.format({'% de Vitória Juntos': '{:.2f}%'}))
+                else: st.warning("Nenhum dado para este jogador no período.")
+
+        elif analysis_type == "Análise por Mapa":
+            selected_map = st.sidebar.selectbox("Selecione um Mapa:", map_list)
+            if selected_map:
+                st.header(f"Ranking de Jogadores na {selected_map}")
+                sort_option_map = st.selectbox("Ordenar por:", ['Partidas Jogadas', '% de Vitória', 'Taxa K/D'], key='map_sort')
+                map_stats = analyzer.get_map_leaderboard(selected_map, start_date, end_date, sort_by=sort_option_map)
+                st.dataframe(map_stats.style.format({'% de Vitória': '{:.2f}%', 'Taxa K/D': '{:.2f}'}))
+
         elif analysis_type == "Confronto 1x1":
-            # ... (UI existente)
+            st.sidebar.subheader("Selecione os Jogadores")
+            player1 = st.sidebar.selectbox("Jogador 1:", player_list, key='h2h_p1')
+            player2 = st.sidebar.selectbox("Jogador 2:", [p for p in player_list if p != player1], key='h2h_p2')
             if player1 and player2:
-                # ...
+                st.header(f"Confronto Direto: {player1} vs {player2}")
+                h2h_overall = analyzer.get_h2h_overall(player1, player2, start_date, end_date)
                 if h2h_overall:
                     st.subheader("Gráfico Comparativo Geral")
                     st.image(create_h2h_comparison_chart(h2h_overall, player1, player2))
@@ -371,9 +450,43 @@ if uploaded_file:
                     trend_p1, trend_p2 = analyzer.get_h2h_cumulative_trend(player1, player2, start_date, end_date)
                     h2h_trend_chart = create_h2h_trend_chart(trend_p1, trend_p2, player1, player2)
                     if h2h_trend_chart: st.image(h2h_trend_chart)
-                    # ... (resto da UI H2H)
-        
-        # ... (restante do código da UI)
+                    else: st.info("Não há confrontos suficientes para gerar um gráfico de evolução.")
+                    st.subheader("Detalhes por Mapa")
+                    h2h_map_stats = analyzer.get_h2h_by_map(player1, player2, start_date, end_date)
+                    if not h2h_map_stats.empty:
+                        st.dataframe(h2h_map_stats.style.format(formatter={col: '{:.2f}' for col in h2h_map_stats.columns if 'K/D' in col}))
+                    else: st.info("Nenhum confronto H2H encontrado nos mapas do período.")
+                else: st.warning("Estes jogadores nunca se enfrentaram no período.")
+
+        elif analysis_type == "Montar Time":
+            st.header("Montar Time (Seleção em Cascata)")
+            st.sidebar.subheader("Selecione os Jogadores")
+            if st.sidebar.button("Limpar Time"):
+                st.session_state.team_players = [""] * 5; st.experimental_rerun()
+            
+            options = player_list
+            selected_so_far = []
+            for i in range(5):
+                is_disabled = (i > 0 and not st.session_state.team_players[i-1])
+                if i > 0 and st.session_state.team_players[i-1]:
+                    selected_so_far = [p for p in st.session_state.team_players if p]
+                    _, options, _ = analyzer.get_core_player_stats(selected_so_far, start_date, end_date)
+                
+                current_player = st.session_state.team_players[i]
+                final_options = [""] + sorted(list(set(options) | {current_player})) if current_player else [""] + options
+                
+                st.session_state.team_players[i] = st.sidebar.selectbox(f"Jogador {i+1}", final_options, index=final_options.index(current_player) if current_player in final_options else 0, key=f'player_{i}', disabled=is_disabled)
+
+            final_team = [p for p in st.session_state.team_players if p]
+            if len(final_team) >= 2:
+                st.subheader("Estatísticas do Núcleo Selecionado")
+                core_stats, _, history_df = analyzer.get_core_player_stats(final_team, start_date, end_date)
+                if core_stats["Partidas Juntos"] > 0:
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.metric("Partidas Juntos", core_stats["Partidas Juntos"]); c2.metric("Vitórias", core_stats["Vitórias"]); c3.metric("Derrotas", core_stats["Derrotas"]); c4.metric("% de Vitória", f"{core_stats['% de Vitória']:.2f}%")
+                    if len(final_team) == 5:
+                        st.subheader("Histórico de Partidas do Time Completo"); st.dataframe(history_df)
+                else: st.warning("Este núcleo de jogadores nunca jogou junto.")
     except Exception as e:
         st.error(f"Ocorreu um erro: {e}"); import traceback; st.error(traceback.format_exc())
 else:
