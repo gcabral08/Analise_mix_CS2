@@ -206,10 +206,17 @@ class StatsAnalyzer:
             p1_stats = group.agg(K=('k', 'sum'), D=('d', 'sum'), RoundDiff=('round_diff', 'sum'))
             p1_wins = match_stats['won'].sum()
             total_matches = len(match_stats)
+            
             p2_matches_on_map = df[(df['player'] == player2) & (df['match_id'].isin(group['match_id']))]
+            
+            # --- LINHA DE VERIFICAÇÃO ADICIONADA AQUI ---
+            # Se não encontrarmos os dados do jogador 2 para este mapa, pulamos para o próximo.
+            if p2_matches_on_map.empty:
+                continue
+    
             p2_stats = p2_matches_on_map.agg(K=('k', 'sum'), D=('d', 'sum'))
             
-            # LINHA CORRIGIDA ABAIXO
+            # Agora o código abaixo só será executado se os dados de p2 existirem.
             results.append({'Mapa': map_name, 'Partidas': total_matches, 
                             f'Vitórias {player1}': int(p1_wins), 
                             f'Vitórias {player2}': total_matches - int(p1_wins), 
@@ -427,6 +434,7 @@ if uploaded_file is not None:
 
 else:
     st.info("Aguardando o upload do arquivo `match_data.txt` para iniciar a análise.")
+
 
 
 
