@@ -196,12 +196,12 @@ class StatsAnalyzer:
         p2_total_k = h2h_matches_p2['k'].sum(); p2_total_d = h2h_matches_p2['d'].sum(); p2_kd = p2_total_k / p2_total_d if p2_total_d > 0 else 0
         return {"Partidas H2H": total_games, f"Vitórias {player1}": int(p1_wins), f"Vitórias {player2}": int(p2_wins), f"K/D Total {player1}": f"{p1_total_k}/{p1_total_d}", f"Taxa K/D {player1}": f"{p1_kd:.2f}", f"K/D Total {player2}": f"{p2_total_k}/{p2_total_d}", f"Taxa K/D {player2}": f"{p2_kd:.2f}"}
 
-   def get_h2h_by_map(self, player1, player2, start_date, end_date):
-    df = self._filter_by_date(start_date, end_date)
-    h2h_matches_p1 = df[(df['player'] == player1) & (df['opponents'].apply(lambda x: player2 in x))]
-    if h2h_matches_p1.empty: return pd.DataFrame()
-    results = []
-    for map_name, group in h2h_matches_p1.groupby('map'):
+    def get_h2h_by_map(self, player1, player2, start_date, end_date):
+        df = self._filter_by_date(start_date, end_date)
+        h2h_matches_p1 = df[(df['player'] == player1) & (df['opponents'].apply(lambda x: player2 in x))]
+        if h2h_matches_p1.empty: return pd.DataFrame()
+        results = []
+        for map_name, group in h2h_matches_p1.groupby('map'):
         match_stats = group.groupby('match_id').first()
         p1_stats = group.agg(K=('k', 'sum'), D=('d', 'sum'), RoundDiff=('round_diff', 'sum'))
         p1_wins = match_stats['won'].sum()
@@ -427,4 +427,5 @@ if uploaded_file is not None:
 
 else:
     st.info("Aguardando o upload do arquivo `match_data.txt` para iniciar a análise.")
+
 
