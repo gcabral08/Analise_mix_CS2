@@ -201,13 +201,13 @@ class StatsAnalyzer:
         h2h_matches_p1 = df[(df['player'] == player1) & (df['opponents'].apply(lambda x: player2 in x))]
         if h2h_matches_p1.empty: return pd.DataFrame()
         results = []
-        for map_name, group in h2h_matches_p1.groupby('map'):
-        match_stats = group.groupby('match_id').first()
-        p1_stats = group.agg(K=('k', 'sum'), D=('d', 'sum'), RoundDiff=('round_diff', 'sum'))
-        p1_wins = match_stats['won'].sum()
-        total_matches = len(match_stats)
-        p2_matches_on_map = df[(df['player'] == player2) & (df['match_id'].isin(group['match_id']))]
-        p2_stats = p2_matches_on_map.agg(K=('k', 'sum'), D=('d', 'sum'))
+            for map_name, group in h2h_matches_p1.groupby('map'):
+            match_stats = group.groupby('match_id').first()
+            p1_stats = group.agg(K=('k', 'sum'), D=('d', 'sum'), RoundDiff=('round_diff', 'sum'))
+            p1_wins = match_stats['won'].sum()
+            total_matches = len(match_stats)
+            p2_matches_on_map = df[(df['player'] == player2) & (df['match_id'].isin(group['match_id']))]
+            p2_stats = p2_matches_on_map.agg(K=('k', 'sum'), D=('d', 'sum'))
         
         # LINHA CORRIGIDA ABAIXO
         results.append({'Mapa': map_name, 'Partidas': total_matches, 
@@ -427,5 +427,6 @@ if uploaded_file is not None:
 
 else:
     st.info("Aguardando o upload do arquivo `match_data.txt` para iniciar a análise.")
+
 
 
