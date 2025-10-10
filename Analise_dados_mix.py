@@ -118,13 +118,10 @@ class StatsAnalyzer:
         stats['% de Vitória Juntos'] = (stats['Vitórias'] / stats['Partidas_Juntos']) * 100
         return stats.sort_values(by='% de Vitória Juntos', ascending=not best).head(5)
 
-    # --- FUNÇÃO CORRIGIDA ---
     def get_map_leaderboard(self, map_name, start_date, end_date, sort_by='% de Vitória'):
         df = self._filter_by_date(start_date, end_date)
         map_df = df[df['map'] == map_name]
         if map_df.empty: return pd.DataFrame()
-
-        # Lógica de get_overall_player_stats replicada aqui, mas operando em map_df
         stats = map_df.groupby('player').agg(
             **{'Partidas Jogadas': ('match_id', 'nunique'), 'Abates (K)': ('k', 'sum'),
                'Mortes (D)': ('d', 'sum'), 'Saldo de Rounds': ('round_diff', 'sum')})
@@ -133,7 +130,6 @@ class StatsAnalyzer:
         stats['Derrotas'] = stats['Partidas Jogadas'] - stats['Vitórias']
         stats['% de Vitória'] = (stats['Vitórias'] / stats['Partidas Jogadas']).fillna(0) * 100
         stats['Taxa K/D'] = (stats['Abates (K)'] / stats['Mortes (D)']).replace([np.inf, -np.inf], 0).fillna(0)
-        
         return stats.sort_values(by=sort_by, ascending=False)
 
     def get_h2h_overall(self, player1, player2, start_date, end_date):
@@ -197,6 +193,36 @@ class StatsAnalyzer:
         if df.empty: return pd.Series(dtype='int64')
         unique_matches = df.drop_duplicates(subset=['match_id'])
         return unique_matches.groupby(unique_matches['date'].dt.date)['match_id'].count()
+        
+    def get_team_combination_stats(self, start_date, end_date):
+        df = self._filter_by_date(start_date, end_date)
+        if df.empty: return pd.DataFrame()
+
+        unique_matches_by_team = self.rosters_by_match[self.rosters_by_match.index.isin(df['match_id'].unique())]
+        if unique_matches_by_team.empty: return pd.DataFrame()
+        
+        team_stats = unique_matches_by_team.groupby('team_roster').agg(
+            Partidas_Jogadas=('won', 'count'), Vitórias=('won', 'sum'),
+            Saldo_de_Rounds=('round_diff', 'sum')
+        )
+        team_stats['Derrotas'] = team_stats['Partidas_Jogadas'] - team_stats['Vitórias']
+        team_stats['% de Vitória'] = (team_stats['Vitórias'] / team_stats['Partidas_Jogadas']) * 100
+        
+        best_maps = {}
+        for roster, group in unique_matches_by_team.groupby('team_roster'):
+            map_perf = group.groupby('map')['won'].agg(['count', 'sum'])
+            map_perf['win_rate'] = (map_perf['sum'] / map_perf['count']) * 100
+            map_perf = map_perf.sort_values(by=['win_rate', 'count'], ascending=[False, False])
+            if not map_perf.empty:
+                best_map_name, best_map_stats = map_perf.index[0], map_perf.iloc[0]
+                best_maps[roster] = f"{best_map_name} ({best_map_stats['win_rate']:.0f}% em {int(best_map_stats['count'])} jogos)"
+            else: best_maps[roster] = "N/A"
+
+        team_stats['Melhor Mapa'] = team_stats.index.map(best_maps)
+        team_stats['Time'] = team_stats.index.map(lambda roster: ', '.join(sorted(list(roster))))
+        
+        final_cols = ['Time', 'Partidas_Jogadas', 'Vitórias', 'Derrotas', '% de Vitória', 'Saldo_de_Rounds', 'Melhor Mapa']
+        return team_stats[final_cols].sort_values(by='Partidas_Jogadas', ascending=False).set_index('Time')
 
 # --- FUNÇÕES DE PLOTAGEM ---
 def create_match_history_chart(series):
@@ -248,7 +274,7 @@ if uploaded_file:
         start_date, end_date = (date_range[0], date_range[1]) if len(date_range) == 2 else (min_date, max_date)
         
         st.sidebar.markdown("---")
-        analysis_type = st.sidebar.radio("Tipo de Análise:", ("Visão Geral", "Estatísticas Gerais", "Análise de Jogador", "Análise por Mapa", "Confronto 1x1", "Montar Time"))
+        analysis_type = st.sidebar.radio("Tipo de Análise:", ("Visão Geral", "Melhores Times", "Estatísticas Gerais", "Análise de Jogador", "Análise por Mapa", "Confronto 1x1", "Montar Time"))
 
         if analysis_type == "Visão Geral":
             st.header(f"Visão Geral das Partidas ({start_date} a {end_date})")
@@ -256,6 +282,15 @@ if uploaded_file:
             chart = create_match_history_chart(match_counts)
             if chart: st.image(chart)
             else: st.info("Nenhuma partida encontrada no período.")
+
+        elif analysis_type == "Melhores Times":
+            st.header(f"Ranking de Times por Partidas Jogadas ({start_date} a {end_date})")
+            min_games = st.slider("Mostrar times com no mínimo quantas partidas?", 1, 20, 3)
+            team_stats_df = analyzer.get_team_combination_stats(start_date, end_date)
+            filtered_df = team_stats_df[team_stats_df['Partidas_Jogadas'] >= min_games]
+            if not filtered_df.empty:
+                st.dataframe(filtered_df.style.format({'% de Vitória': '{:.2f}%'}))
+            else: st.info(f"Nenhum time encontrado com {min_games} ou mais partidas jogadas no período.")
 
         elif analysis_type == "Estatísticas Gerais":
             st.header(f"Estatísticas Gerais ({start_date} a {end_date})")
@@ -271,12 +306,10 @@ if uploaded_file:
                 if summary:
                     c1, c2, c3, c4 = st.columns(4)
                     c1.metric("Partidas", summary["Partidas Jogadas"]); c2.metric("Vitórias", summary["Vitórias"]); c3.metric("Derrotas", summary["Derrotas"]); c4.metric("% de Vitória", summary["% de Vitória"])
-                    
                     st.subheader("Tendência de Performance")
                     trend_chart = create_player_trend_chart(analyzer.get_player_cumulative_trend(player_name, start_date, end_date))
                     if trend_chart: st.image(trend_chart)
                     else: st.info("Não há dados de tendência para este jogador.")
-                    
                     st.subheader("Análise de Companheiros")
                     col1, col2 = st.columns(2)
                     with col1:
