@@ -3,6 +3,8 @@ import pandas as pd
 import json
 from collections import Counter
 from datetime import datetime, date
+import matplotlib.pyplot as plt
+import io # Necessário para Streamlit não usar arquivos temporários diretamente
 
 # --- LÓGICA DE ANÁLISE (CLASSE StatsAnalyzer) ---
 # Adição de lógica para lidar com a filtragem temporal.
@@ -28,8 +30,6 @@ class StatsAnalyzer:
             if score_a > score_b: is_team_a_winner = True
             elif score_b > score_a: is_team_a_winner = False
             
-            # Adicionando Rounds Ganhos e Perdidos por Jogador (para cálculo posterior)
-            
             # Time A
             for player_stats in match.get('team_a', []):
                 player_name = self._unify_player_names(player_stats.get('player'))
@@ -44,13 +44,9 @@ class StatsAnalyzer:
         df['date'] = pd.to_datetime(df['date'])
         return df
 
-    # Método auxiliar para aplicar a filtragem temporal ao DataFrame principal
     def _filter_by_date(self, start_date, end_date):
-        # A data do Streamlit vem como date.date, precisa converter para datetime
         start_dt = datetime.combine(start_date, datetime.min.time())
         end_dt = datetime.combine(end_date, datetime.max.time())
-        
-        # Filtra o DataFrame usando a coluna 'date'
         filtered_df = self.df[(self.df['date'] >= start_dt) & (self.df['date'] <= end_dt)]
         return filtered_df
     
@@ -58,13 +54,41 @@ class StatsAnalyzer:
     def get_player_list(self): return sorted(self.df['player'].unique())
     def get_map_list(self): return sorted(self.df['map'].unique())
     
-    # --- MÉTODOS DE ANÁLISE (MODIFICADOS PARA USAR FILTRO DE DATA) ---
+    # --- NOVO MÉTODO PARA TENDÊNCIA TEMPORAL ---
+    def get_player_cumulative_trend(self, player_name, start_date, end_date):
+        df = self._filter_by_date(start_date, end_date)
+        player_df = df[df['player'] == player_name].sort_values(by='date').copy()
+        
+        if player_df.empty:
+            return pd.DataFrame()
+        
+        # Agrega estatísticas por partida (match_id) para evitar duplicação por data
+        match_stats = player_df.groupby('match_id').agg({
+            'date': 'first',
+            'k': 'first', 
+            'd': 'first',
+            'won': 'first'
+        }).sort_values(by='date').reset_index()
+
+        # Cálculo Cumulativo de K/D
+        match_stats['K_Cumulativo'] = match_stats['k'].cumsum()
+        match_stats['D_Cumulativo'] = match_stats['d'].cumsum()
+        match_stats['Taxa K/D Cumulativa'] = (match_stats['K_Cumulativo'] / match_stats['D_Cumulativo']).fillna(0)
+        
+        # Cálculo Cumulativo de % de Vitória
+        match_stats['Vitórias_Cumulativas'] = match_stats['won'].cumsum()
+        match_stats['Partidas_Totais'] = range(1, len(match_stats) + 1)
+        match_stats['% de Vitória Cumulativa'] = (match_stats['Vitórias_Cumulativas'] / match_stats['Partidas_Totais']) * 100
+        
+        return match_stats[['date', 'match_id', 'Taxa K/D Cumulativa', '% de Vitória Cumulativa']]
+
+
+    # --- MÉTODOS DE ANÁLISE (EXISTENTES, MODIFICADOS PARA USAR FILTRO DE DATA) ---
 
     def get_overall_player_stats(self, start_date, end_date, sort_by='Partidas Jogadas'):
         df = self._filter_by_date(start_date, end_date)
         if df.empty: return pd.DataFrame()
         
-        # O restante da lógica de agregação é o mesmo, mas usando o df filtrado
         stats = df.groupby('player').agg(**{'Partidas Jogadas': ('match_id', 'nunique'),'Abates (K)': ('k', 'sum'),'Assistências (A)': ('a', 'sum'),'Mortes (D)': ('d', 'sum'), 'Saldo de Rounds': ('round_diff', 'sum')})
         wins = df[df['won'] == True].groupby('player')['won'].count()
         losses = df[df['won'] == False].groupby('player')['won'].count()
@@ -80,7 +104,6 @@ class StatsAnalyzer:
         map_df = df[df['map'] == map_name]
         if map_df.empty: return pd.DataFrame()
         
-        # O restante da lógica de agregação é o mesmo, mas usando o map_df filtrado
         stats = map_df.groupby('player').agg(**{'Partidas Jogadas': ('match_id', 'nunique'), 'Abates (K)': ('k', 'sum'), 'Mortes (D)': ('d', 'sum'), 'Saldo de Rounds': ('round_diff', 'sum')})
         wins = map_df[map_df['won'] == True].groupby('player')['won'].count()
         losses = map_df[map_df['won'] == False].groupby('player')['won'].count()
@@ -94,7 +117,7 @@ class StatsAnalyzer:
         df = self._filter_by_date(start_date, end_date)
         player_df = df[df['player'] == player_name].dropna(subset=['won'])
         if player_df.empty: return None
-        total_games = len(player_df.groupby('match_id').first()) # Conta partidas únicas, caso haja jogadores repetidos
+        total_games = len(player_df.groupby('match_id').first())
         wins = player_df.groupby('match_id').first()['won'].sum()
         total_rounds_ganhos = player_df['rounds_ganhos'].sum()
         total_rounds_perdidos = player_df['rounds_perdidos'].sum()
@@ -109,7 +132,6 @@ class StatsAnalyzer:
         player_df = df[df['player'] == player_name]
         if player_df.empty: return pd.DataFrame()
         
-        # Agrega as estatísticas, incluindo os rounds
         stats_by_map = player_df.groupby('map').agg(
             Partidas=('match_id', 'nunique'), 
             Abates=('k', 'sum'), 
@@ -119,43 +141,33 @@ class StatsAnalyzer:
             Saldo_Rounds=('round_diff', 'sum')
         )
         
-        # A contagem de vitórias por mapa não precisa mudar, pois já usa 'won'
         wins_by_map = player_df[player_df['won'] == True].groupby('map')['won'].count()
         
         stats_by_map['Vitórias'] = wins_by_map.reindex(stats_by_map.index, fill_value=0)
         stats_by_map['% de Vitória'] = (stats_by_map['Vitórias'] / stats_by_map['Partidas']) * 100
         stats_by_map['K/D'] = (stats_by_map['Abates'] / stats_by_map['Mortes']).fillna(0)
         
-        # Reordena as colunas
         stats_by_map = stats_by_map[['Partidas', 'Vitórias', '% de Vitória', 'Abates', 'Mortes', 'K/D', 'Rounds_Ganhos', 'Rounds_Perdidos', 'Saldo_Rounds']]
         
         return stats_by_map.sort_values(by='Partidas', ascending=False)
     
-    # Os métodos de Dupla e H2H também devem ser atualizados para usar o filtro de data
-    
+    # MÉTODOS DE DUPLA E H2H (mantidos com filtro de data)
     def get_performance_with_teammates(self, player_name, start_date, end_date, best=True):
         df = self._filter_by_date(start_date, end_date)
         player_matches = df[df['player'] == player_name]
         if player_matches.empty: return pd.DataFrame()
-        
         teammate_list = player_matches['teammates'].explode()
         common_teammates = teammate_list.value_counts()
         if common_teammates.empty: return pd.DataFrame()
-        
         performance = []
         for teammate, games_played in common_teammates.items():
-            # Filtra partidas onde o jogador principal e o teammate estavam no mesmo match_id
             matches_with_teammate = df[(df['player'] == player_name) & (df['teammates'].apply(lambda x: teammate in x))].dropna(subset=['won'])
-            
-            # Garante que estamos contando partidas únicas e vitórias (usando o índice da partida)
             unique_matches = matches_with_teammate.groupby('match_id').first()
-            
             if not unique_matches.empty:
                 wins = unique_matches['won'].sum()
                 total_matches = len(unique_matches)
                 win_rate = (wins / total_matches) * 100
                 performance.append({'Companheiro': teammate, 'Partidas Juntos': total_matches, '% de Vitória Juntos': win_rate})
-                
         if not performance: return pd.DataFrame()
         return pd.DataFrame(performance).sort_values(by='% de Vitória Juntos', ascending=not best)
 
@@ -163,64 +175,109 @@ class StatsAnalyzer:
         df = self._filter_by_date(start_date, end_date)
         duo_matches = df[(df['player'] == player1) & (df['teammates'].apply(lambda x: player2 in x))].dropna(subset=['won'])
         if duo_matches.empty: return None
-        
         total_games = len(duo_matches.groupby('match_id').first())
         wins = duo_matches.groupby('match_id').first()['won'].sum()
         win_rate = (wins / total_games) * 100
-        
         p1_stats = duo_matches[['k', 'a', 'd']].sum()
         p2_matches = df[(df['player'] == player2) & (df['match_id'].isin(duo_matches['match_id']))]
         p2_stats = p2_matches[['k', 'a', 'd']].sum()
-        
         combined_stats = p1_stats + p2_stats
         combined_kd = (combined_stats['k'] / combined_stats['d']) if combined_stats['d'] > 0 else 0
-        
         return {"Partidas Juntos": total_games, "Vitórias": int(wins), "Derrotas": total_games - int(wins), "% de Vitória da Dupla": f"{win_rate:.2f}%", "K/D Combinado": f"{combined_kd:.2f}"}
 
     def get_h2h_overall(self, player1, player2, start_date, end_date):
         df = self._filter_by_date(start_date, end_date)
         h2h_matches_p1 = df[(df['player'] == player1) & (df['opponents'].apply(lambda x: player2 in x))].dropna(subset=['won'])
         if h2h_matches_p1.empty: return None
-        
-        # Conta partidas únicas e vitórias
         unique_matches = h2h_matches_p1.groupby('match_id').first()
-        p1_wins = unique_matches['won'].sum()
-        total_games = len(unique_matches)
-        p2_wins = total_games - p1_wins
-        
-        p1_total_k = h2h_matches_p1['k'].sum(); p1_total_d = h2h_matches_p1['d'].sum()
-        p1_kd = p1_total_k / p1_total_d if p1_total_d > 0 else 0
-        
+        p1_wins = unique_matches['won'].sum(); total_games = len(unique_matches); p2_wins = total_games - p1_wins
+        p1_total_k = h2h_matches_p1['k'].sum(); p1_total_d = h2h_matches_p1['d'].sum(); p1_kd = p1_total_k / p1_total_d if p1_total_d > 0 else 0
         h2h_matches_p2 = df[(df['player'] == player2) & (df['match_id'].isin(h2h_matches_p1['match_id']))]
-        p2_total_k = h2h_matches_p2['k'].sum(); p2_total_d = h2h_matches_p2['d'].sum()
-        p2_kd = p2_total_k / p2_total_d if p2_total_d > 0 else 0
-        
+        p2_total_k = h2h_matches_p2['k'].sum(); p2_total_d = h2h_matches_p2['d'].sum(); p2_kd = p2_total_k / p2_total_d if p2_total_d > 0 else 0
         return {"Partidas H2H": total_games, f"Vitórias {player1}": int(p1_wins), f"Vitórias {player2}": int(p2_wins), f"K/D Total {player1}": f"{p1_total_k}/{p1_total_d}", f"Taxa K/D {player1}": f"{p1_kd:.2f}", f"K/D Total {player2}": f"{p2_total_k}/{p2_total_d}", f"Taxa K/D {player2}": f"{p2_kd:.2f}"}
 
     def get_h2h_by_map(self, player1, player2, start_date, end_date):
         df = self._filter_by_date(start_date, end_date)
         h2h_matches_p1 = df[(df['player'] == player1) & (df['opponents'].apply(lambda x: player2 in x))]
         if h2h_matches_p1.empty: return pd.DataFrame()
-        
         results = []
         for map_name, group in h2h_matches_p1.groupby('map'):
-            # Usa a primeira ocorrência por match_id para estatísticas de partida (vitórias/derrotas)
             match_stats = group.groupby('match_id').first()
-            
             p1_stats = group.agg(K=('k', 'sum'), D=('d', 'sum'), RoundDiff=('round_diff', 'sum'))
             p1_wins = match_stats['won'].sum()
             total_matches = len(match_stats)
-            
             p2_matches_on_map = df[(df['player'] == player2) & (df['match_id'].isin(group['match_id']))]
             p2_stats = p2_matches_on_map.agg(K=('k', 'sum'), D=('d', 'sum'))
-            
             results.append({'Mapa': map_name, 'Partidas': total_matches, f'Vitórias {player1}': int(p1_wins), f'Vitórias {player2}': total_matches - int(p1_wins), f'K/D {player1}': f"{p1_stats.K.sum()}/{p1_stats.D.sum()}", f'K/D {player2}': f"{p2_stats.K.sum()}/{p2_stats.D.sum()}", 'Saldo de Rounds (p/ P1)': p1_stats.RoundDiff.sum()})
-            
         return pd.DataFrame(results)
+
+# --- FUNÇÕES DE PLOTAGEM ---
+def create_top_kd_chart(df):
+    """Cria um gráfico de barras para o Top 10 K/D, filtrando por partidas mínimas."""
+    MIN_GAMES = 5
+    filtered_df = df[df['Partidas Jogadas'] >= MIN_GAMES].nlargest(10, 'Taxa K/D')
+    
+    if filtered_df.empty:
+        return None, f"Nenhum jogador com mais de {MIN_GAMES} partidas para o gráfico."
+        
+    fig, ax = plt.subplots(figsize=(10, 6))
+    players = filtered_df.index
+    kd_ratio = filtered_df['Taxa K/D']
+    
+    ax.barh(players, kd_ratio, color='skyblue')
+    
+    # Adiciona a Taxa K/D como rótulo na barra
+    for index, value in enumerate(kd_ratio):
+        ax.text(value, index, f'{value:.2f}', va='center')
+        
+    ax.set_title(f'Top {len(filtered_df)} Jogadores por Taxa K/D (mínimo de {MIN_GAMES} partidas)', fontsize=14)
+    ax.set_xlabel('Taxa K/D', fontsize=12)
+    ax.set_ylabel('Jogador', fontsize=12)
+    plt.gca().invert_yaxis() # Coloca o Top 1 no topo
+    plt.tight_layout()
+    
+    # Salva o gráfico em um buffer (para Streamlit)
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png')
+    plt.close(fig)
+    return buf, None
+
+def create_player_trend_chart(trend_df, player_name):
+    """Cria um gráfico de linha para a tendência cumulativa de K/D e % Vitória."""
+    if trend_df.empty:
+        return None
+        
+    fig, ax1 = plt.subplots(figsize=(12, 6))
+    
+    match_index = trend_df.index # Usaremos o índice (partidas em ordem)
+    
+    # Eixo Y1: Taxa K/D Cumulativa
+    color = 'tab:blue'
+    ax1.set_xlabel('Partidas Jogadas')
+    ax1.set_ylabel('Taxa K/D Cumulativa', color=color)
+    ax1.plot(match_index, trend_df['Taxa K/D Cumulativa'], color=color, label='K/D')
+    ax1.tick_params(axis='y', labelcolor=color)
+    ax1.grid(True, axis='y', linestyle='--')
+    
+    # Eixo Y2: % de Vitória Cumulativa
+    ax2 = ax1.twinx()  
+    color = 'tab:red'
+    ax2.set_ylabel('% de Vitória Cumulativa', color=color)  
+    ax2.plot(match_index, trend_df['% de Vitória Cumulativa'], color=color, linestyle='--', label='% Vitória')
+    ax2.tick_params(axis='y', labelcolor=color)
+    
+    fig.suptitle(f'Tendência de Performance Cumulativa de {player_name}', fontsize=16)
+    fig.tight_layout(rect=[0, 0.03, 1, 0.95]) # Ajusta para o suptitle
+    
+    # Salva o gráfico em um buffer
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png')
+    plt.close(fig)
+    return buf
 
 # --- INTERFACE GRÁFICA (Streamlit) ---
 
-st.set_page_config(layout="wide", page_title="Análise de Partidas CS2")
+st.set_page_config(layout="wide", page_title="Análise de Partidas CS2 - Gráficos")
 st.title("📊 Painel de Análise de Partidas de Counter-Strike 2")
 
 uploaded_file = st.file_uploader("Carregue seu arquivo 'match_data.txt'", type="txt")
@@ -237,7 +294,6 @@ if uploaded_file is not None:
         # --- SELEÇÃO DE DATA E TIPO DE ANÁLISE NA SIDEBAR ---
         st.sidebar.header("Filtros e Seleção")
         
-        # 1. Adicionar o seletor de intervalo de tempo
         min_date = analyzer.df['date'].min().date()
         max_date = analyzer.df['date'].max().date()
 
@@ -248,21 +304,32 @@ if uploaded_file is not None:
             max_value=max_date
         )
         
-        if len(date_range) == 2:
-            start_date, end_date = date_range
-        else:
-            # Caso o usuário selecione apenas uma data (o que é o padrão do Streamlit antes do segundo clique)
-            start_date = min_date
-            end_date = max_date
+        start_date = date_range[0] if len(date_range) == 2 else min_date
+        end_date = date_range[1] if len(date_range) == 2 else max_date
             
         st.sidebar.markdown("---")
         analysis_type = st.sidebar.radio("Tipo de Análise:", ("Estatísticas Gerais", "Análise por Mapa", "Análise de Jogador", "Análise de Dupla (Juntos)", "Confronto 1x1 (Contra)"))
 
         
-        # --- LÓGICA DE EXIBIÇÃO DE DADOS (USANDO OS NOVOS FILTROS) ---
+        # --- LÓGICA DE EXIBIÇÃO DE DADOS (COM GRÁFICOS) ---
         
         if analysis_type == "Estatísticas Gerais":
             st.header(f"Estatísticas Gerais de Todos os Jogadores ({start_date} a {end_date})")
+            
+            # --- NOVO GRÁFICO 1: TOP K/D ---
+            st.subheader("Visualização: Top Jogadores por Taxa K/D")
+            stats_df = analyzer.get_overall_player_stats(start_date, end_date, sort_by='Taxa K/D')
+            
+            chart_buffer, error_msg = create_top_kd_chart(stats_df)
+            
+            if chart_buffer:
+                # Usa st.image para exibir o gráfico do buffer
+                st.image(chart_buffer, caption='Taxa K/D para jogadores com no mínimo 5 partidas.')
+            else:
+                st.info(error_msg)
+            
+            # --- TABELA GERAL ---
+            st.subheader("Tabela Completa de Estatísticas")
             sort_option = st.selectbox("Ordenar por:", ['Partidas Jogadas', '% de Vitória', 'Taxa K/D', 'Saldo de Rounds', 'Abates (K)'])
             stats_df = analyzer.get_overall_player_stats(start_date, end_date, sort_by=sort_option)
             if not stats_df.empty:
@@ -300,6 +367,15 @@ if uploaded_file is not None:
                     c6.metric("Rounds Perdidos", overall_stats["Rounds Perdidos"])
                     c7.metric("Saldo de Rounds", overall_stats["Saldo de Rounds"])
 
+                    # --- NOVO GRÁFICO 2: TENDÊNCIA CUMULATIVA ---
+                    st.subheader("Tendência de Performance ao Longo do Tempo")
+                    trend_df = analyzer.get_player_cumulative_trend(player_name, start_date, end_date)
+                    trend_chart_buffer = create_player_trend_chart(trend_df, player_name)
+                    if trend_chart_buffer:
+                        st.image(trend_chart_buffer, caption='Evolução da Taxa K/D e % de Vitória cumulativa por partida.')
+                    else:
+                        st.info("Não há dados de partidas suficientes para gerar o gráfico de tendência neste intervalo.")
+
                     st.subheader("Desempenho Detalhado por Mapa")
                     map_perf_df = analyzer.get_performance_by_map(player_name, start_date, end_date)
                     st.dataframe(map_perf_df.style.format({'% de Vitória': '{:.2f}%', 'K/D': '{:.2f}'}))
@@ -314,7 +390,7 @@ if uploaded_file is not None:
         elif analysis_type == "Análise de Dupla (Juntos)":
             st.sidebar.subheader("Selecione a Dupla")
             player1 = st.sidebar.selectbox("Jogador 1:", player_list, index=player_list.index("Khan") if "Khan" in player_list else 0)
-            player2 = st.sidebar.selectbox("Jogador 2:", player_list, index=player_list.index("Fzr") if "Fzr" in player_list and "Fzr" != player1 else (player_list.index(player_list[1]) if len(player_list)>1 else 0))
+            player2 = st.sidebar.selectbox("Jogador 2:", player_list, index=player_list.index("Fzr") if "Fzr" in player_list and "Fzr" != player1 else (player_list.index(player_list[1]) if len(player_list)>1 and player_list[1] != player1 else 0))
             if player1 and player2 and player1 != player2:
                 st.header(f"Análise da Dupla: {player1} & {player2} ({start_date} a {end_date})"); duo_stats = analyzer.get_duo_stats(player1, player2, start_date, end_date)
                 if duo_stats:
@@ -324,7 +400,7 @@ if uploaded_file is not None:
         elif analysis_type == "Confronto 1x1 (Contra)":
             st.sidebar.subheader("Selecione os Jogadores")
             player1 = st.sidebar.selectbox("Jogador 1:", player_list, index=player_list.index("Khan") if "Khan" in player_list else 0, key='h2h_p1')
-            player2 = st.sidebar.selectbox("Jogador 2:", player_list, index=player_list.index("Ace") if "Ace" in player_list and "Ace" != player1 else (player_list.index(player_list[1]) if len(player_list)>1 else 0), key='h2h_p2')
+            player2 = st.sidebar.selectbox("Jogador 2:", player_list, index=player_list.index("Ace") if "Ace" in player_list and "Ace" != player1 else (player_list.index(player_list[1]) if len(player_list)>1 and player_list[1] != player1 else 0), key='h2h_p2')
             if player1 and player2 and player1 != player2:
                 st.header(f"Confronto Direto: {player1} vs {player2} ({start_date} a {end_date})")
                 h2h_overall = analyzer.get_h2h_overall(player1, player2, start_date, end_date)
