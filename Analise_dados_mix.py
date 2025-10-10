@@ -136,36 +136,38 @@ class StatsAnalyzer:
             f"Taxa K/D {player2}": (p2_stats['k'].sum() / p2_stats['d'].sum()) if p2_stats['d'].sum() > 0 else 0
         }
 
-    # --- FUNÇÃO H2H POR MAPA CORRIGIDA E MELHORADA ---
-    def get_h2h_by_map(self, player1, player2, start_date, end_date):
-        df = self._filter_by_date(start_date, end_date)
-        p1_vs_p2_matches = df[df['player'] == player1]['opponents'].apply(lambda x: player2 in x)
-        match_ids = df[df['player'] == player1][p1_vs_p2_matches]['match_id'].unique()
-        if len(match_ids) == 0: return pd.DataFrame()
+# --- FUNÇÃO H2H POR MAPA CORRIGIDA ---
+def get_h2h_by_map(self, player1, player2, start_date, end_date):
+    df = self._filter_by_date(start_date, end_date)
+    p1_vs_p2_matches = df[df['player'] == player1]['opponents'].apply(lambda x: player2 in x)
+    match_ids = df[df['player'] == player1][p1_vs_p2_matches]['match_id'].unique()
+    if len(match_ids) == 0: return pd.DataFrame()
 
-        h2h_df = df[df['match_id'].isin(match_ids)]
-        results = []
-        for map_name, group in h2h_df.groupby('map'):
-            p1_map_stats = group[group['player'] == player1]
-            p2_map_stats = group[group['player'] == player2]
-            
-            if p1_map_stats.empty or p2_map_stats.empty: continue
+    h2h_df = df[df['match_id'].isin(match_ids)]
+    results = []
+    for map_name, group in h2h_df.groupby('map'):
+        p1_map_stats = group[group['player'] == player1]
+        p2_map_stats = group[group['player'] == player2]
+        
+        if p1_map_stats.empty or p2_map_stats.empty: continue
 
-            total_matches = group['match_id'].nunique()
-            p1_wins = p1_map_stats.groupby('match_id')['won'].first().sum()
-            p1_kd = (p1_map_stats['k'].sum() / p1_map_stats['d'].sum()) if p1_map_stats['d'].sum() > 0 else 0
-            p2_kd = (p2_map_stats['k'].sum() / p2_map_stats['d'].sum()) if p2_map_stats['d'].sum() > 0 else 0
+        total_matches = group['match_id'].nunique()
+        p1_wins = p1_map_stats.groupby('match_id')['won'].first().sum()
+        p1_kd = (p1_map_stats['k'].sum() / p1_map_stats['d'].sum()) if p1_map_stats['d'].sum() > 0 else 0
+        p2_kd = (p2_map_stats['k'].sum() / p2_map_stats['d'].sum()) if p2_map_stats['d'].sum() > 0 else 0
 
-            results.append({
-                'Mapa': map_name,
-                'Partidas': total_matches,
-                f'Vitórias {player1}': int(p1_wins),
-                f'Vitórias {player2}": total_matches - int(p1_wins),
-                f'K/D {player1}': p1_kd,
-                f'K/D {player2}': p2_kd
-            })
-        return pd.DataFrame(results).sort_values(by='Partidas', ascending=False)
+        results.append({
+            'Mapa': map_name,
+            'Partidas': total_matches,
+            f'Vitórias {player1}': int(p1_wins),
+            # LINHA CORRIGIDA ABAIXO
+            f'Vitórias {player2}': total_matches - int(p1_wins),
+            f'K/D {player1}': p1_kd,
+            f'K/D {player2}': p2_kd
+        })
+    return pd.DataFrame(results).sort_values(by='Partidas', ascending=False)
 
+    
     # --- NOVA FUNÇÃO PARA ANÁLISE DE TIME 5X5 ---
     def get_team_stats(self, team_players, start_date, end_date):
         df = self._filter_by_date(start_date, end_date)
@@ -333,3 +335,4 @@ if uploaded_file:
         st.error(f"Ocorreu um erro ao processar o arquivo. Verifique o formato. Detalhe: {e}")
 else:
     st.info("Aguardando o upload do arquivo `match_data.txt` para iniciar a análise.")
+
