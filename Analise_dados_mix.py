@@ -79,7 +79,7 @@ class StatsAnalyzer:
         stats['% de Vitória'] = (stats['Vitórias'] / stats['Partidas Jogadas']).fillna(0) * 100
         stats['Taxa K/D'] = (stats['Abates (K)'] / stats['Mortes (D)']).replace([np.inf, -np.inf], 0).fillna(0)
         return stats.sort_values(by=sort_by, ascending=False)
-
+        
     def get_player_overall_stats_summary(self, player_name, start_date, end_date):
         df = self._filter_by_date(start_date, end_date)
         player_df = df[df['player'] == player_name]
@@ -122,6 +122,7 @@ class StatsAnalyzer:
         df = self._filter_by_date(start_date, end_date)
         map_df = df[df['map'] == map_name]
         if map_df.empty: return pd.DataFrame()
+        # Usamos type(self) para permitir herança, se aplicável. Senão, StatsAnalyzer funciona igual.
         temp_analyzer = type(self)([]); temp_analyzer.df = map_df; temp_analyzer._precompute_rosters()
         return temp_analyzer.get_overall_player_stats(start_date, end_date, sort_by)
 
@@ -159,8 +160,6 @@ class StatsAnalyzer:
         
         core_set = set(core_players)
         relevant_rosters = self.rosters_by_match[self.rosters_by_match.index.isin(df['match_id'].unique())]
-        
-        # --- BUG CORRIGIDO AQUI ---
         valid_match_ids = [mid for mid, row in relevant_rosters.iterrows() if core_set.issubset(row['team_roster'])]
         
         if not valid_match_ids:
@@ -177,7 +176,7 @@ class StatsAnalyzer:
         
         history = match_info.copy()
         history['Oponentes'] = history['opponents'].apply(lambda x: ', '.join(sorted(list(x))))
-        history['Placar'] = history.apply(lambda row: f"{row['rounds_ganhos']} a {row['rounds_perdidos']}" if row['won'] else f"{row['rounds_perdidos']} a {row['rounds_ganhos']}", axis=1)
+        history['Placar'] = history.apply(lambda row: f"{int(row['rounds_ganhos'])} a {int(row['rounds_perdidos'])}" if row['won'] else f"{int(row['rounds_perdidos'])} a {int(row['rounds_ganhos'])}", axis=1)
         history.rename(columns={'map': 'Mapa', 'date': 'Data'}, inplace=True)
         history['Data'] = history['Data'].dt.strftime('%Y-%m-%d')
         
@@ -244,7 +243,9 @@ if uploaded_file:
         if analysis_type == "Visão Geral":
             st.header(f"Visão Geral das Partidas ({start_date} a {end_date})")
             match_counts = analyzer.get_match_count_over_time(start_date, end_date)
-            st.image(create_match_history_chart(match_counts))
+            chart = create_match_history_chart(match_counts)
+            if chart: st.image(chart)
+            else: st.info("Nenhuma partida encontrada no período.")
 
         elif analysis_type == "Estatísticas Gerais":
             st.header(f"Estatísticas Gerais ({start_date} a {end_date})")
@@ -258,20 +259,25 @@ if uploaded_file:
                 st.header(f"Análise Individual de {player_name}")
                 summary = analyzer.get_player_overall_stats_summary(player_name, start_date, end_date)
                 if summary:
-                    c1,c2,c3,c4 = st.columns(4)
+                    c1, c2, c3, c4 = st.columns(4)
                     c1.metric("Partidas", summary["Partidas Jogadas"]); c2.metric("Vitórias", summary["Vitórias"]); c3.metric("Derrotas", summary["Derrotas"]); c4.metric("% de Vitória", summary["% de Vitória"])
                     
                     st.subheader("Tendência de Performance")
-                    st.image(create_player_trend_chart(analyzer.get_player_cumulative_trend(player_name, start_date, end_date)))
+                    trend_chart = create_player_trend_chart(analyzer.get_player_cumulative_trend(player_name, start_date, end_date))
+                    if trend_chart: st.image(trend_chart)
+                    else: st.info("Não há dados de tendência para este jogador.")
                     
                     st.subheader("Análise de Companheiros")
                     col1, col2 = st.columns(2)
                     with col1:
                         st.write("**Melhores Companheiros (% de Vitória)**")
-                        st.dataframe(analyzer.get_performance_with_teammates(player_name, start_date, end_date, True).style.format({'% de Vitória Juntos': '{:.2f}%'}))
+                        best_teammates = analyzer.get_performance_with_teammates(player_name, start_date, end_date, True)
+                        st.dataframe(best_teammates.style.format({'% de Vitória Juntos': '{:.2f}%'}))
                     with col2:
                         st.write("**Piores Companheiros (% de Vitória)**")
-                        st.dataframe(analyzer.get_performance_with_teammates(player_name, start_date, end_date, False).style.format({'% de Vitória Juntos': '{:.2f}%'}))
+                        worst_teammates = analyzer.get_performance_with_teammates(player_name, start_date, end_date, False)
+                        st.dataframe(worst_teammates.style.format({'% de Vitória Juntos': '{:.2f}%'}))
+                else: st.warning("Nenhum dado para este jogador no período.")
 
         elif analysis_type == "Análise por Mapa":
             selected_map = st.sidebar.selectbox("Selecione um Mapa:", map_list)
@@ -295,6 +301,7 @@ if uploaded_file:
                     h2h_map_stats = analyzer.get_h2h_by_map(player1, player2, start_date, end_date)
                     if not h2h_map_stats.empty:
                         st.dataframe(h2h_map_stats.style.format(formatter={col: '{:.2f}' for col in h2h_map_stats.columns if 'K/D' in col}))
+                    else: st.info("Nenhum confronto H2H encontrado nos mapas do período.")
                 else: st.warning("Estes jogadores nunca se enfrentaram no período.")
 
         elif analysis_type == "Montar Time":
@@ -304,10 +311,13 @@ if uploaded_file:
                 st.session_state.team_players = [""] * 5; st.experimental_rerun()
             
             options = player_list
+            selected_so_far = []
             for i in range(5):
                 is_disabled = (i > 0 and not st.session_state.team_players[i-1])
                 if i > 0 and st.session_state.team_players[i-1]:
-                    _, options = analyzer.get_core_player_stats([p for p in st.session_state.team_players if p], start_date, end_date)
+                    selected_so_far = [p for p in st.session_state.team_players if p]
+                    # --- LINHA CORRIGIDA ---
+                    _, options, _ = analyzer.get_core_player_stats(selected_so_far, start_date, end_date)
                 
                 current_player = st.session_state.team_players[i]
                 final_options = [""] + sorted(list(set(options) | {current_player})) if current_player else [""] + options
